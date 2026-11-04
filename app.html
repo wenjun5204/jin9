@@ -60,7 +60,15 @@
       <div id="trend-drawer" class="trend-drawer hidden">
         <div class="trend-head">
           <span id="trend-name"></span>
-          <button id="trend-close" class="mini-btn">关闭</button>
+          <div class="trend-right">
+            <div class="seg">
+              <button class="seg-btn active" data-range="1d">1日</button>
+              <button class="seg-btn" data-range="7d">7日</button>
+              <button class="seg-btn" data-range="1m">1月</button>
+              <button class="seg-btn" data-range="6m">半年</button>
+            </div>
+            <button id="trend-close" class="mini-btn">关闭</button>
+          </div>
         </div>
         <canvas id="trend-canvas" width="340" height="150"></canvas>
       </div>

@@ -3,13 +3,15 @@ import {
   fmtPrice, fmtPct, fmtAmount,
   debounce, nowClock, fmtTime,
 } from "./lib/utils.js";
-import { searchStocks, fetchTrend } from "./lib/sources/em-quotes.js";
+import { searchStocks, fetchTrend, fetchKline } from "./lib/sources/em-quotes.js";
 
 // ---------- 全局状态 ----------
 let snapshot = null; // { indexes, watch, sectors, breadth, news, ... }
 let activeTab = "quotes";
 let filter = "all";
 let newsCount = 0; // 当前渲染快讯总数（用于判断新条目标记）
+let trendSecid = null; // 当前分时抽屉的标的
+let trendRange = "1d"; // 1d 当日分时 | 7d 近7日 | 1m 近一月 | 6m 近半年（收盘价趋势折线）
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -76,6 +78,16 @@ function bindUI() {
 
   // 分时关闭
   $("#trend-close").addEventListener("click", closeTrend);
+
+  // 分时抽屉：周期切换（1日 / 7日 / 1月 / 半年）
+  document.querySelectorAll("#trend-drawer .seg-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll("#trend-drawer .seg-btn").forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      trendRange = btn.dataset.range;
+      loadTrend();
+    });
+  });
 
   // 快讯过滤器
   document.querySelectorAll(".filter-btn").forEach((btn) => {
@@ -159,26 +171,55 @@ async function addFromNews(secid, name) {
   document.querySelector('[data-tab="quotes"]').click();
 }
 
-// ---------- 分时 ----------
+// ---------- 分时 / 趋势 ----------
 async function openTrend(secid, name) {
+  trendSecid = secid;
+  trendRange = "1d"; // 打开默认当日分时
+  document.querySelectorAll("#trend-drawer .seg-btn").forEach((b) =>
+    b.classList.toggle("active", b.dataset.range === "1d")
+  );
   $("#trend-name").textContent = name;
+  const prev = $("#trend-drawer").classList.contains("hidden");
   $("#trend-drawer").classList.remove("hidden");
+  if (prev) await loadTrend();
+}
+
+async function loadTrend() {
+  if (!trendSecid) return;
+  const canvas = $("#trend-canvas");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   try {
-    const data = await fetchTrend(secid);
-    drawTrend(data);
+    if (trendRange === "1d") {
+      const data = await fetchTrend(trendSecid);
+      drawTrend(data);
+    } else {
+      // 自然日回看天数（含双休/节假日余量），半年 200 天约 130+ 个交易日
+      const days = trendRange === "7d" ? 10 : trendRange === "1m" ? 40 : 200;
+      const data = await fetchKline(trendSecid, days);
+      drawLine(data, trendRange === "7d" ? "近7日" : trendRange === "1m" ? "近1月" : "近半年");
+    }
   } catch (err) {
-    $("#trend-canvas").getContext("2d").clearRect(0, 0, 340, 150);
+    ctx.fillStyle = "#8a93a6";
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("数据加载失败", canvas.width / 2, canvas.height / 2);
+    ctx.textAlign = "left";
   }
 }
-function closeTrend() { $("#trend-drawer").classList.add("hidden"); }
+
+function closeTrend() {
+  $("#trend-drawer").classList.add("hidden");
+  trendSecid = null;
+}
 
 function drawTrend(data) {
   const canvas = $("#trend-canvas");
   const ctx = canvas.getContext("2d");
   const W = canvas.width, H = canvas.height;
   ctx.clearRect(0, 0, W, H);
-  const pts = data.points;
-  if (!pts.length) return;
+  const pts = data?.points;
+  if (!pts || !pts.length) return;
   // 缩放
   const min = Math.min(...pts.map((p) => p.price), data.preClose);
   const max = Math.max(...pts.map((p) => p.price), data.preClose);
@@ -205,6 +246,61 @@ function drawTrend(data) {
   ctx.beginPath();
   pts.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p.avg)) : ctx.lineTo(x(i), y(p.avg))));
   ctx.stroke();
+}
+
+/** 多日趋势折线：收盘价曲线 + 渐变填充 + 网格刻度 */
+function drawLine(data, label) {
+  const canvas = $("#trend-canvas");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  const pts = data?.points;
+  if (!pts || pts.length < 2) return;
+  const closes = pts.map((p) => p.close);
+  const min = Math.min(...closes);
+  const max = Math.max(...closes);
+  const padL = 34, padR = 4, padT = 10, padB = 14;
+  const range = max - min || 1;
+  const x = (i) => padL + (i / (pts.length - 1)) * (W - padL - padR);
+  const y = (v) => padT + (1 - (v - min) / range) * (H - padT - padB);
+  // 网格 + 左轴刻度
+  ctx.strokeStyle = "#232b3a";
+  ctx.lineWidth = 1;
+  ctx.fillStyle = "#8a93a6";
+  ctx.font = "9px sans-serif";
+  for (let g = 0; g <= 4; g++) {
+    const v = min + (range * g) / 4;
+    const yy = y(v);
+    ctx.beginPath();
+    ctx.moveTo(padL, yy);
+    ctx.lineTo(W - padR, yy);
+    ctx.stroke();
+    ctx.fillText(v.toFixed(1), 2, yy + 3);
+  }
+  // 涨跌主色（末收盘 vs 首收盘）
+  const up = closes[closes.length - 1] >= closes[0];
+  const color = up ? "#e05252" : "#2db673";
+  // 渐变填充
+  const grad = ctx.createLinearGradient(0, padT, 0, H - padB);
+  grad.addColorStop(0, up ? "rgba(224,82,82,.28)" : "rgba(45,182,115,.28)");
+  grad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p.close)) : ctx.lineTo(x(i), y(p.close))));
+  ctx.lineTo(x(pts.length - 1), H - padB);
+  ctx.lineTo(x(0), H - padB);
+  ctx.closePath();
+  ctx.fillStyle = grad;
+  ctx.fill();
+  // 收盘折线
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  pts.forEach((p, i) => (i === 0 ? ctx.moveTo(x(i), y(p.close)) : ctx.lineTo(x(i), y(p.close))));
+  ctx.stroke();
+  // 首尾日期
+  ctx.fillStyle = "#8a93a6";
+  ctx.font = "9px sans-serif";
+  ctx.fillText(`▍${label} ${pts[0].date} ~ ${pts[pts.length - 1].date}`, padL, H - 3);
 }
 
 // ---------- 渲染 ----------
