@@ -176,10 +176,15 @@ body { max-height: 600px; overflow: hidden; }
 .news-meta { display: flex; align-items: center; gap: 6px; color: var(--text-dim); font-size: 11px; margin-bottom: 3px; }
 .news-meta .imp-tag { color: var(--accent); font-weight: 700; }
 .news-title { font-size: 13px; line-height: 1.4; }
-.news-summary {
-  color: var(--text-dim); font-size: 12px; line-height: 1.5; margin-top: 4px;
-  white-space: pre-wrap;
+/* 默认折叠：摘要与阅读全文仅在展开时显示 */
+.news-summary { display: none; }
+.news-item.expanded .news-summary { display: block; color: var(--text-dim); font-size: 12px; line-height: 1.5; margin-top: 4px; white-space: pre-wrap; }
+.news-foot { margin-top: 5px; }
+.news-link {
+  display: none; color: var(--accent); font-size: 11px; text-decoration: none; cursor: pointer;
 }
+.news-item.expanded .news-link { display: inline-block; }
+.news-link:hover { text-decoration: underline; }
 .news-stocks { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .stock-tag {
   background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px;

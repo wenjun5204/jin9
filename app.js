@@ -106,10 +106,18 @@ function bindUI() {
     const row = e.target.closest(".quote-row");
     if (row) openTrend(row.dataset.secid, row.dataset.name);
   });
-  // 快讯关联股票标签 -> 跳到行情并加入自选
+  // 快讯关联股票标签 -> 跳到行情并加入自选；条目点击展开/收起；阅读全文跳详情
   $("#news-list").addEventListener("click", (e) => {
     const tag = e.target.closest(".stock-tag");
-    if (tag) addFromNews(tag.dataset.secid, tag.dataset.name);
+    if (tag) { addFromNews(tag.dataset.secid, tag.dataset.name); return; }
+    const link = e.target.closest(".news-link");
+    if (link) {
+      const url = link.dataset.url;
+      if (url) chrome.tabs.create({ url });
+      return;
+    }
+    const item = e.target.closest(".news-item");
+    if (item) item.classList.toggle("expanded");
   });
 }
 
@@ -333,6 +341,7 @@ function renderNewsItem(n, isFirst) {
     <div class="news-title">${n.title}</div>
     ${n.summary ? `<div class="news-summary">${n.summary}</div>` : ""}
     ${stocks ? `<div class="news-stocks">${stocks}</div>` : ""}
+    ${n.url ? `<div class="news-foot"><a class="news-link" data-url="${n.url}">阅读全文 ↗</a></div>` : ""}
   </div>`;
 }
 
