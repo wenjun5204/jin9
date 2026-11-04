@@ -16,30 +16,59 @@ const DEFAULTS = {
 
 // 行情源降级状态
 let emFailCount = 0;
+// 高频定时器（SW 存活期间有效）；alarms 仅作保活心跳
+let quoteTimer = null;
+let newsTimer = null;
 
 // ---------- 生命周期 ----------
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", async () => {
-  await self.clients.claim();
-  const settings = await getSettings();
-  await ensureAlarms(settings);
-  // 首次激活立即拉取一次
-  await Promise.allSettled([pollQuotes(), pollNews()]);
+  try {
+    await self.clients.claim();
+    const settings = await getSettings();
+    // alarms 创建失败不能阻断初始化（Alarm 最小周期 0.5 分钟）
+    await ensureAlarms(settings).catch(() => {});
+    startTimers(settings);
+    // 首次激活立即拉取一次
+    await Promise.allSettled([pollQuotes(), pollNews()]);
+  } catch (err) {
+    console.warn("[盯盘快讯] 激活流程异常: ", err?.message);
+  }
 });
 
 // ---------- 定时 ----------
+// MV3 限制：chrome.alarms 最小周期 30s（0.5 分），不足以支撑 5s/15s 高频刷新。
+// 因此：高频拉取由 SW 存活期间的 setInterval 承担；alarms 仅作 30s 保活心跳，
+// SW 被休眠后由心跳唤醒并重建定时器，保证后台持续更新。
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "quotes") pollQuotes();
-  if (alarm.name === "news") pollNews();
+  if (alarm.name !== "heartbeat") return;
+  getSettings().then((settings) => {
+    startTimers(settings);
+    // 唤醒后立即补拉一次，确保 popup 打开时缓存是最新的
+    Promise.allSettled([pollQuotes(), pollNews()]);
+  });
 });
 
 async function ensureAlarms(settings) {
-  await chrome.alarms.create("quotes", {
-    periodInMinutes: Math.max(0.05, settings.refreshMs / 60000),
+  // heartbeat 固定 30s（不随 refreshMs 变化），clamp 到 alarm 允许的最小周期
+  await chrome.alarms.create("heartbeat", {
+    periodInMinutes: 0.5,
   });
-  await chrome.alarms.create("news", {
-    periodInMinutes: Math.max(0.05, settings.newsMs / 60000),
-  });
+}
+
+function startTimers(settings) {
+  stopTimers();
+  const qms = Math.max(5000, Number(settings.refreshMs) || 15000);
+  const nms = Math.max(5000, Number(settings.newsMs) || 15000);
+  quoteTimer = setInterval(pollQuotes, qms);
+  newsTimer = setInterval(pollNews, nms);
+}
+
+function stopTimers() {
+  if (quoteTimer) clearInterval(quoteTimer);
+  if (newsTimer) clearInterval(newsTimer);
+  quoteTimer = null;
+  newsTimer = null;
 }
 
 // ---------- 行情拉取 ----------
@@ -154,12 +183,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "GET_SNAPSHOT":
         return { ok: true, snapshot: await getSnapshot(), settings: await getSettings() };
       case "REFRESH_NOW":
-        // popup 打开时主动刷新一次（先清错误状态再重拉）
+        // popup 打开时主动刷新一次（先清错误状态并确保定时器运行）
         {
           const snap = await getSnapshot();
           snap.lastError = null;
           snap.lastErrorTs = 0;
           await saveSnapshot(snap);
+          const settings = await getSettings();
+          await ensureAlarms(settings).catch(() => {});
+          startTimers(settings);
         }
         await Promise.allSettled([pollQuotes(), pollNews()]);
         return { ok: true, snapshot: await getSnapshot() };
@@ -189,7 +221,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         const cur = await getSettings();
         const next = { ...cur, ...msg.settings };
         await storageSet(SETTINGS_KEY, next);
-        await ensureAlarms(next);
+        await ensureAlarms(next).catch(() => {});
+        startTimers(next);
         return { ok: true, settings: next };
       }
       default:
