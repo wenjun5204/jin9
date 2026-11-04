@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "盯盘快讯 · 实时行情与 7×24 金融快讯",
+  "version": "0.1.0",
+  "description": "实时 A 股指数/自选股行情 + 7×24 金融快讯，类似金十数据的轻量盯盘插件。点击图标或按 Ctrl/Cmd+Shift+K 呼出。",
+  "minimum_chrome_version": "102",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "app.html",
+    "default_title": "盯盘快讯",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "https://push2.eastmoney.com/*",
+    "https://push2his.eastmoney.com/*",
+    "https://push2ex.eastmoney.com/*",
+    "https://searchapi.eastmoney.com/*",
+    "https://np-listapi.eastmoney.com/*",
+    "https://qt.gtimg.cn/*"
+  ]
+}

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>盯盘快讯</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- 顶栏：Tab 切换 + 状态 -->
+    <header class="topbar">
+      <nav class="tabs">
+        <button class="tab active" data-tab="quotes">行情</button>
+        <button class="tab" data-tab="news">快讯</button>
+      </nav>
+      <div class="topbar-right">
+        <span id="src-dot" class="src-dot" title="数据源状态"></span>
+        <span id="clock" class="clock"></span>
+        <select id="refresh-select" class="refresh-select" title="刷新间隔">
+          <option value="5000">5s</option>
+          <option value="15000" selected>15s</option>
+          <option value="30000">30s</option>
+        </select>
+      </div>
+    </header>
+
+    <!-- 行情 Tab -->
+    <main id="panel-quotes" class="panel active">
+      <!-- 指数横滑 -->
+      <div id="index-row" class="index-row"></div>
+      <!-- 涨跌家数情绪条 -->
+      <div class="breadth">
+        <div id="breadth-bar" class="breadth-bar"></div>
+        <div id="breadth-labels" class="breadth-labels"></div>
+      </div>
+      <!-- 自选股 -->
+      <section class="block">
+        <div class="block-head">
+          <span class="block-title">自选股</span>
+          <button id="add-watch-btn" class="mini-btn">＋ 添加</button>
+        </div>
+        <div id="watch-list" class="watch-list"></div>
+        <div id="search-box" class="search-box hidden">
+          <input id="search-input" type="text" placeholder="代码 / 名称 / 拼音" autocomplete="off" />
+          <div id="search-result" class="search-result"></div>
+        </div>
+      </section>
+      <!-- 板块 -->
+      <section class="block">
+        <div class="block-head">
+          <span class="block-title">板块</span>
+          <div class="seg">
+            <button class="seg-btn active" data-dir="up">涨幅榜</button>
+            <button class="seg-btn" data-dir="down">跌幅榜</button>
+          </div>
+        </div>
+        <div id="sector-list" class="sector-list"></div>
+      </section>
+      <!-- 分时抽屉 -->
+      <div id="trend-drawer" class="trend-drawer hidden">
+        <div class="trend-head">
+          <span id="trend-name"></span>
+          <button id="trend-close" class="mini-btn">关闭</button>
+        </div>
+        <canvas id="trend-canvas" width="340" height="150"></canvas>
+      </div>
+    </main>
+
+    <!-- 快讯 Tab -->
+    <main id="panel-news" class="panel hidden">
+      <div class="news-filter">
+        <button class="filter-btn active" data-filter="all">全部</button>
+        <button class="filter-btn" data-filter="important">重要</button>
+        <button class="filter-btn" data-filter="a">A股</button>
+        <button class="filter-btn" data-filter="board">板块</button>
+      </div>
+      <div id="new-badge" class="new-badge hidden"></div>
+      <div id="news-list" class="news-list"></div>
+      <div id="news-end" class="news-end">没有更多了</div>
+    </main>
+
+    <div id="error-banner" class="error-banner hidden"></div>
+
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
