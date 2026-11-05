@@ -77,14 +77,18 @@ async function pollQuotes() {
   try {
     const watch = await getWatchlist();
     const results = await fetchAllQuotes(watch.secids);
-    const snapshot = await getSnapshot();
-    snapshot.indexes = results.indexes;
-    snapshot.watch = results.watch;
-    snapshot.sectors = results.sectors;
-    snapshot.breadth = results.breadth;
-    snapshot.quotesTs = Date.now();
-    snapshot.lastError = null;
-    await saveSnapshot(snapshot);
+    const patch = {
+      indexes: results.indexes,
+      watch: results.watch,
+      sectorsUp: results.sectorsUp,
+      sectorsDown: results.sectorsDown,
+      breadth: results.breadth,
+      quotesTs: Date.now(),
+      lastError: null,
+    };
+    // 资金面拉取失败时保留上一份数据，不用 undefined 覆盖
+    if (results.marketFlow) patch.marketFlow = results.marketFlow;
+    await updateSnapshot(patch);
     emFailCount = 0;
     broadcast();
   } catch (err) {
@@ -94,11 +98,11 @@ async function pollQuotes() {
       try {
         const watch = await getWatchlist();
         const watchQuotes = await tx.fetchTxQuotes(watch.secids);
-        const snapshot = await getSnapshot();
-        snapshot.watch = watchQuotes;
-        snapshot.quotesTs = Date.now();
-        snapshot.lastError = "东财行情异常，自选股已切换腾讯数据源";
-        await saveSnapshot(snapshot);
+        await updateSnapshot({
+          watch: watchQuotes,
+          quotesTs: Date.now(),
+          lastError: "东财行情异常，自选股已切换腾讯数据源",
+        });
         broadcast();
         return;
       } catch (txErr) {
@@ -110,32 +114,30 @@ async function pollQuotes() {
 }
 
 async function fetchAllQuotes(secids) {
-  const [indexes, watch, sectors, breadth] = await Promise.all([
+  const [indexes, watch, sectorsUp, sectorsDown, breadth, marketFlow] = await Promise.all([
     emQ.fetchIndexes(),
     secids.length ? emQ.fetchQuotes(secids) : Promise.resolve([]),
-    emQ.fetchSectors({ pz: 8 }),
+    emQ.fetchSectors({ dir: "up", pz: 15 }),
+    emQ.fetchSectors({ dir: "down", pz: 15 }),
     emQ.fetchBreadth().catch(() => ({ up: 0, down: 0, flat: 0, ts: Date.now() })),
+    emQ.fetchMarketFlow().catch(() => null),
   ]);
-  return { indexes, watch, sectors, breadth };
+  return { indexes, watch, sectorsUp, sectorsDown, breadth, marketFlow };
 }
 
 function markQuotesError(err) {
   const msg = `行情获取失败: ${err?.message || err}`;
-  getSnapshot().then((snap) => {
-    snap.lastError = msg;
-    snap.lastErrorTs = Date.now();
-    return saveSnapshot(snap);
-  });
+  updateSnapshot({ lastError: msg, lastErrorTs: Date.now() });
 }
 
 // ---------- 快讯拉取（增量） ----------
 
 async function pollNews() {
   try {
+    // 只读：作为增量合并的基数（写入走串行队列，不会覆盖行情数据）
     const snapshot = await getSnapshot();
     const { list } = await emN.fetchNews({ size: 20 });
     if (!list.length) {
-      await saveSnapshot(snapshot);
       broadcast();
       return;
     }
@@ -143,9 +145,10 @@ async function pollNews() {
     const existing = snapshot.news || [];
     const seen = new Set(existing.map((n) => n.id));
     const added = list.filter((n) => !seen.has(n.id));
-    snapshot.news = [...added, ...existing].slice(0, 100);
-    snapshot.newsTs = Date.now();
-    await saveSnapshot(snapshot);
+    await updateSnapshot({
+      news: [...added, ...existing].slice(0, 100),
+      newsTs: Date.now(),
+    });
     broadcast(added.length ? { added: added.length } : undefined);
   } catch (err) {
     // 快讯失败静默退避，不打断 UI
@@ -154,14 +157,33 @@ async function pollNews() {
 
 // ---------- 快照读写 ----------
 
+/**
+ * 快照更新走串行队列：并发 poll（行情/快讯/错误标记）各自只 patch 自己的字段，
+ * 避免「读-改-写」交错导致后写者用旧快照整体覆盖、丢掉先写者的数据。
+ */
+let snapshotChain = Promise.resolve();
+function updateSnapshot(patch) {
+  const task = snapshotChain.then(async () => {
+    const snap = await getSnapshot();
+    Object.assign(snap, patch);
+    await saveSnapshot(snap);
+    return snap;
+  });
+  // 队列吞掉错误，保证后续写入不被一次失败卡死
+  snapshotChain = task.catch(() => null);
+  return task;
+}
+
 async function getSnapshot() {
   const { [CACHE_KEY]: snap } = await chrome.storage.session.get(CACHE_KEY);
   return (
     snap || {
       indexes: [],
       watch: [],
-      sectors: [],
+      sectorsUp: [],
+      sectorsDown: [],
       breadth: { up: 0, down: 0, flat: 0 },
+      marketFlow: null,
       news: [],
       quotesTs: 0,
       newsTs: 0,
@@ -183,18 +205,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       case "GET_SNAPSHOT":
         return { ok: true, snapshot: await getSnapshot(), settings: await getSettings() };
       case "REFRESH_NOW":
-        // popup 打开时主动刷新一次（先清错误状态并确保定时器运行）
+        // popup 打开：先秒回缓存快照（首屏立即有数据），再后台刷新，
+        // 新数据到达后经 DATA_UPDATE 广播增量更新 UI
         {
-          const snap = await getSnapshot();
-          snap.lastError = null;
-          snap.lastErrorTs = 0;
-          await saveSnapshot(snap);
+          const cached = await getSnapshot();
           const settings = await getSettings();
           await ensureAlarms(settings).catch(() => {});
           startTimers(settings);
+          updateSnapshot({ lastError: null, lastErrorTs: 0 });
+          Promise.allSettled([pollQuotes(), pollNews()]);
+          return { ok: true, snapshot: cached, settings };
         }
-        await Promise.allSettled([pollQuotes(), pollNews()]);
-        return { ok: true, snapshot: await getSnapshot() };
       case "GET_WATCH":
         return { ok: true, watch: await getWatchlist() };
       case "ADD_WATCH": {

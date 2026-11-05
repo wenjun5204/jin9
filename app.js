@@ -1,17 +1,22 @@
 // 前端逻辑：行情 Tab + 快讯 Tab
 import {
   fmtPrice, fmtPct, fmtAmount,
-  debounce, nowClock, fmtTime,
+  debounce, fmtTime,
 } from "./lib/utils.js";
 import { searchStocks, fetchTrend, fetchKline } from "./lib/sources/em-quotes.js";
+import { fetchCalendarDay } from "./lib/sources/em-calendar.js";
 
 // ---------- 全局状态 ----------
-let snapshot = null; // { indexes, watch, sectors, breadth, news, ... }
+let snapshot = null; // { indexes, watch, sectorsUp, sectorsDown, breadth, news, ... }
 let activeTab = "quotes";
 let filter = "all";
 let newsCount = 0; // 当前渲染快讯总数（用于判断新条目标记）
 let trendSecid = null; // 当前分时抽屉的标的
 let trendRange = "1d"; // 1d 当日分时 | 7d 近7日 | 1m 近一月 | 6m 近半年（收盘价趋势折线）
+let sectorDir = "up"; // 板块榜方向：up 涨幅榜 | down 跌幅榜
+let calDate = "today"; // 日历日期：yesterday | today | tomorrow
+let calFilter = "all"; // 日历过滤：all | data | event
+const calCache = new Map(); // 日期字符串 -> { econ, events, failed, ts }（10 分钟内复用）
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -27,7 +32,6 @@ async function init() {
   });
   // 主动请求一次并触发刷新
   await refreshNow();
-  startClock();
 }
 
 async function refreshNow() {
@@ -40,14 +44,16 @@ async function refreshNow() {
 
 // ---------- UI 事件绑定 ----------
 function bindUI() {
-  // Tab 切换
+  // Tab 切换（通用：按 data-tab 匹配对应 panel）
   document.querySelectorAll(".tab").forEach((btn) => {
     btn.addEventListener("click", () => {
       document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
       activeTab = btn.dataset.tab;
-      $("#panel-quotes").classList.toggle("hidden", activeTab !== "quotes");
-      $("#panel-news").classList.toggle("hidden", activeTab !== "news");
+      document.querySelectorAll(".panel").forEach((p) => {
+        p.classList.toggle("hidden", p.id !== `panel-${activeTab}`);
+      });
+      if (activeTab === "calendar") loadCalendar();
       render();
     });
   });
@@ -58,11 +64,12 @@ function bindUI() {
     await chrome.runtime.sendMessage({ type: "SET_SETTINGS", settings: { refreshMs: ms, newsMs: ms } });
   });
 
-  // 板块切换
-  document.querySelectorAll(".seg-btn").forEach((btn) => {
+  // 板块榜切换（涨幅 / 跌幅，仅作用于板块 Tab 内的 seg）
+  document.querySelectorAll("#panel-sectors .seg-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
-      document.querySelectorAll(".seg-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll("#panel-sectors .seg-btn").forEach((b) => b.classList.remove("active"));
       btn.classList.add("active");
+      sectorDir = btn.dataset.dir;
       renderSectors(); // 用缓存数据即可（榜单数据在快照中）
     });
   });
@@ -87,6 +94,38 @@ function bindUI() {
       trendRange = btn.dataset.range;
       loadTrend();
     });
+  });
+
+  // 日历：日期切换（昨日/今日/明日）与类型过滤（全部/数据/事件）
+  document.querySelectorAll("#panel-calendar .seg-btn[data-caldate]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document
+        .querySelectorAll("#panel-calendar .seg-btn[data-caldate]")
+        .forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      calDate = btn.dataset.caldate;
+      loadCalendar();
+    });
+  });
+  document.querySelectorAll("#panel-calendar .seg-btn[data-calfilter]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document
+        .querySelectorAll("#panel-calendar .seg-btn[data-calfilter]")
+        .forEach((b) => b.classList.remove("active"));
+      btn.classList.add("active");
+      calFilter = btn.dataset.calfilter;
+      renderCalendar();
+    });
+  });
+  // 日历事件行点击展开详情；展开区内相关快讯/搜索链接直接外跳
+  $("#calendar-list").addEventListener("click", (e) => {
+    const link = e.target.closest(".cal-rel, .cal-search");
+    if (link) {
+      if (link.dataset.url) chrome.tabs.create({ url: link.dataset.url });
+      return;
+    }
+    const row = e.target.closest(".cal-event");
+    if (row) row.classList.toggle("expanded");
   });
 
   // 快讯过滤器
@@ -306,12 +345,13 @@ function drawLine(data, label) {
 // ---------- 渲染 ----------
 function render() {
   renderQuotes();
+  renderSectors();
   renderNews();
+  renderCalendar();
   renderStatus();
 }
 
 function renderStatus() {
-  $("#clock").textContent = nowClock();
   const dot = $("#src-dot");
   const err = snapshot?.lastError;
   dot.className = "src-dot " + (err ? (err.includes("腾讯") ? "warn" : "err") : "ok");
@@ -325,8 +365,8 @@ function renderQuotes() {
   if (activeTab !== "quotes") return;
   renderIndexes();
   renderBreadth();
+  renderMarketFlow();
   renderWatch();
-  renderSectors();
 }
 
 function renderIndexes() {
@@ -334,9 +374,11 @@ function renderIndexes() {
   $("#index-row").innerHTML = rows
     .map((i) => {
       const cls = i.pct > 0 ? "up" : i.pct < 0 ? "down" : "flat";
+      // 外汇（离岸人民币）保留 4 位小数，其余 2 位
+      const dec = i.price > 0 && i.price < 10 ? 4 : 2;
       return `<div class="index-card" data-secid="${i.secid}" data-name="${i.name}">
         <div class="index-name">${i.name}</div>
-        <div class="index-price ${cls}">${fmtPrice(i.price)}</div>
+        <div class="index-price ${cls}">${fmtPrice(i.price, dec)}</div>
         <div class="index-pct ${cls}">${fmtPct(i.pct)}</div>
       </div>`;
     })
@@ -357,6 +399,22 @@ function renderBreadth() {
     <span class="up">涨 ${b.up}</span>
     <span class="flat">平 ${b.flat}</span>
     <span class="down">跌 ${b.down}</span>`;
+}
+
+/** 盘中资金面：两市成交额 + 涨停/炸板/跌停家数（北向实时净流入已停止披露） */
+function renderMarketFlow() {
+  const el = $("#market-flow");
+  const f = snapshot?.marketFlow;
+  if (!f || !f.turnover) {
+    el.innerHTML = "&nbsp;";
+    return;
+  }
+  // 亿元 -> 万亿缩写（不足万亿显示亿）
+  const t = f.turnover;
+  const turnover = t >= 1e12 ? `${(t / 1e12).toFixed(2)}万亿` : fmtAmount(t);
+  el.innerHTML = `
+    <span>两市成交 <b>${turnover}</b></span>
+    <span><i class="up">涨停 ${f.limitUp}</i> · 炸板 ${f.broken} · <i class="down">跌停 ${f.limitDown}</i></span>`;
 }
 
 function renderWatch() {
@@ -384,20 +442,212 @@ function renderWatch() {
 }
 
 function renderSectors() {
-  // 榜单方向由快照的 sectors 决定；此处简化：SW 固定取涨幅榜
-  const rows = snapshot?.sectors || [];
-  $("#sector-list").innerHTML = rows
-    .map((s) => {
-      const cls = s.pct > 0 ? "up" : s.pct < 0 ? "down" : "flat";
-      return `<div class="sector-row">
-        <div>
-          <div class="sector-name">${s.name}</div>
-          <div class="sector-leader">领涨: ${s.leader || "-"}</div>
-        </div>
-        <div class="sector-pct ${cls}">${fmtPct(s.pct)}</div>
-      </div>`;
-    })
-    .join("");
+  if (activeTab !== "sectors") return;
+  const rows = (sectorDir === "down" ? snapshot?.sectorsDown : snapshot?.sectorsUp) || [];
+  const leaderLabel = sectorDir === "down" ? "领跌" : "领涨";
+  $("#sector-list").innerHTML = rows.length
+    ? rows
+        .map((s) => {
+          const cls = s.pct > 0 ? "up" : s.pct < 0 ? "down" : "flat";
+          return `<div class="sector-row">
+            <div>
+              <div class="sector-name">${s.name}</div>
+              <div class="sector-leader">${leaderLabel}: ${s.leader || "-"}</div>
+            </div>
+            <div class="sector-pct ${cls}">${fmtPct(s.pct)}</div>
+          </div>`;
+        })
+        .join("")
+    : '<div style="color:var(--text-dim);padding:12px;text-align:center">暂无板块数据</div>';
+}
+
+// ---------- 财经日历 ----------
+
+/** calDate(yesterday/today/tomorrow) -> 'yyyy-MM-dd' */
+function calDateStr() {
+  const d = new Date();
+  if (calDate === "yesterday") d.setDate(d.getDate() - 1);
+  else if (calDate === "tomorrow") d.setDate(d.getDate() + 1);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+async function loadCalendar() {
+  const key = calDateStr();
+  const cached = calCache.get(key);
+  const fresh = cached && Date.now() - cached.ts < 10 * 60 * 1000;
+  if (!fresh) {
+    $("#calendar-list").innerHTML = '<div class="cal-empty">加载中…</div>';
+    try {
+      const day = await fetchCalendarDay(key);
+      calCache.set(key, { ...day, ts: Date.now() });
+    } catch (err) {
+      $("#calendar-list").innerHTML = `<div class="cal-empty">日历加载失败: ${err?.message || err}</div>`;
+      return;
+    }
+  }
+  renderCalendar();
+}
+
+function renderCalendar() {
+  if (activeTab !== "calendar") return;
+  const day = calCache.get(calDateStr());
+  if (!day) return;
+  // 汇总行：国外经济数据 + 日历事件（含中国数据预告），按时间排序
+  const econRows = calFilter === "event" ? [] : day.econ;
+  const evtRows = day.events.filter((e) =>
+    calFilter === "data" ? e.kind === "data" : calFilter === "event" ? e.kind === "event" : true
+  );
+  const rows = [...econRows, ...evtRows].sort((a, b) => {
+    const na = a.time === "--:--" ? 1 : 0;
+    const nb = b.time === "--:--" ? 1 : 0;
+    if (na !== nb) return na - nb;
+    return a.time < b.time ? -1 : a.time > b.time ? 1 : 0;
+  });
+  if (!rows.length) {
+    $("#calendar-list").innerHTML =
+      `<div class="cal-empty">${day.failed || "当日暂无财经日历条目"}</div>`;
+    return;
+  }
+  // 统计行：说明「带值数据」与「发布预告」的数量（预告类无前值/公布值字段）
+  const dataCount = day.events.filter((e) => e.kind === "data").length;
+  const pubCount = day.econ.filter((e) => e.published).length;
+  const label = { yesterday: "昨日", today: "今日", tomorrow: "明日" }[calDate] || "";
+  const countLine = `<div class="cal-count">${label} · 带值数据 ${day.econ.length} 条（已公布 ${pubCount}）· 发布预告 ${dataCount} 条</div>`;
+  // 打新申购名单（随日期切换；无申购则隐藏区块）
+  const ipo = day.ipo || [];
+  const ipoBlock = $("#ipo-block");
+  if (calFilter !== "event" && ipo.length) {
+    ipoBlock.classList.remove("hidden");
+    $("#ipo-count").textContent = `${label}可申购 ${ipo.length} 只`;
+    $("#ipo-list").innerHTML = ipo.map(renderIpoRow).join("");
+  } else {
+    ipoBlock.classList.add("hidden");
+  }
+  $("#calendar-list").innerHTML = countLine + rows.map(renderCalRow).join("");
+}
+
+/** 打新行：名称/申购代码/板块 + 发行价/PE对比/顶格市值 */
+function renderIpoRow(r) {
+  const price = r.price != null ? `${fmtCalValue(r.price)}元` : "发行价待定";
+  const pe =
+    r.pe != null
+      ? r.industryPe != null
+        ? `PE ${r.pe} / 行业 ${r.industryPe}`
+        : `PE ${r.pe}`
+      : "";
+  const cap = r.topCap != null ? `顶格需配 ${Math.round(Number(r.topCap))}万` : "";
+  const sub = [`申购 ${r.applyCode || "--"}`, r.market, cap].filter(Boolean).join(" · ");
+  return `<div class="ipo-row">
+    <div class="ipo-main">
+      <div class="ipo-name">${escapeHtml(r.name)}</div>
+      <div class="ipo-sub">${escapeHtml(sub)}</div>
+    </div>
+    <div class="cal-values">
+      <div class="ipo-price">${price}</div>
+      ${pe ? `<div class="ipo-pe">${pe}</div>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderCalRow(r) {
+  const country = r.country
+    ? `<span class="cal-country">${escapeHtml(r.country)}</span>`
+    : "";
+  if (r.kind === "econ") {
+    const val = r.published ? fmtCalValue(r.value) : "待公布";
+    return `<div class="cal-row">
+      <span class="cal-time">${r.time}</span>
+      ${country}
+      <div class="cal-main"><div class="cal-name">${escapeHtml(r.name)}</div></div>
+      <div class="cal-values">
+        <div class="cal-val${r.published ? " pub" : ""}">${val}</div>
+        <div class="cal-pre">前值 ${r.pre != null ? fmtCalValue(r.pre) : "--"}</div>
+      </div>
+    </div>`;
+  }
+  if (r.kind === "data") {
+    // 发布预告：东财源仅有时间+名称，无前值/公布值，右侧给「预告」标记避免误读为空数据
+    return `<div class="cal-row cal-event">
+      <span class="cal-time">${r.time}</span>
+      ${country}
+      <div class="cal-main">
+        <div class="cal-name">${escapeHtml(r.name)}</div>
+        ${renderCalDetail(r)}
+      </div>
+      <div class="cal-values"><div class="cal-val tag">预告</div><span class="cal-chev">▸</span></div>
+    </div>`;
+  }
+  return `<div class="cal-row cal-event">
+    <span class="cal-time">${r.time}</span>
+    ${country}
+    <div class="cal-main">
+      <div class="cal-name">${escapeHtml(r.name)}</div>
+      ${renderCalDetail(r)}
+    </div>
+    <div class="cal-values"><span class="cal-chev">▸</span></div>
+  </div>`;
+}
+
+/** 事件展开区：自带详情 + 相关快讯（缓存内关键词匹配）+ 站内搜索兜底 */
+function renderCalDetail(r) {
+  const bits = [];
+  if (r.content) bits.push(escapeHtml(r.content));
+  const related = findRelatedNews(r.name);
+  if (related.length) {
+    bits.push(
+      '<div class="cal-rel-head">相关快讯</div>' +
+        related
+          .map(
+            (n) =>
+              `<div class="cal-rel" data-url="${n.url || ""}"><span class="cal-rel-time">${fmtTime(n.showTime)}</span>${escapeHtml(n.title)}</div>`
+          )
+          .join("")
+    );
+  }
+  const searchUrl = `https://so.eastmoney.com/news/s?keyword=${encodeURIComponent(r.name)}`;
+  bits.push(`<a class="cal-search" data-url="${searchUrl}">搜索相关新闻 ↗</a>`);
+  return `<div class="cal-summary">${bits.join("")}</div>`;
+}
+
+/** 从事件名提取匹配关键词：剥掉尾部行为短语取实体名，再从头衔后提取人名 */
+const CAL_TAIL_RE =
+  /(?:发表讲话|发表声明|讲话|答记者问|问答环节|主持一场活动[^，。]*|举行例行新闻发布会|举行新闻发布会|新闻发布会|发布会|公布利率决议|议息会议|利率决议|公布财报|财报|会议纪要|介绍当前外交政策相关议题)[，。]*$/;
+const CAL_ROLE_RE = /(?:总统|主席|行长|总裁|管委|执委|首席经济学家|发言人|外长|财长)/;
+function calKeywords(name) {
+  const raw = String(name || "");
+  const out = new Set();
+  const entity = raw.replace(CAL_TAIL_RE, "").trim();
+  if (entity.length >= 2 && entity !== raw) out.add(entity);
+  const m = raw.match(CAL_ROLE_RE);
+  if (m) {
+    const person = raw.slice(raw.indexOf(m[0]) + m[0].length).replace(CAL_TAIL_RE, "").trim();
+    if (person.length >= 2) out.add(person);
+  }
+  return [...out];
+}
+
+/** 在缓存的 7×24 快讯里按关键词找相关条目（最多 3 条） */
+function findRelatedNews(name) {
+  const kws = calKeywords(name);
+  const news = snapshot?.news || [];
+  if (!kws.length || !news.length) return [];
+  return news.filter((n) => kws.some((k) => (n.title || "").includes(k))).slice(0, 3);
+}
+
+/** 日历数值：超大数缩写（亿/万），其余原样 */
+function fmtCalValue(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return String(v);
+  if (Math.abs(n) >= 1e6) return fmtAmount(n);
+  return String(v);
+}
+
+/** 简单 HTML 转义（日历名称/摘要来自外部数据源） */
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[c]);
 }
 
 // ---------- 快讯渲染 ----------
@@ -452,11 +702,6 @@ function matchFilter(item) {
     default:
       return true;
   }
-}
-
-// ---------- 时钟 ----------
-function startClock() {
-  setInterval(() => { $("#clock").textContent = nowClock(); }, 1000);
 }
 
 init().catch((e) => {

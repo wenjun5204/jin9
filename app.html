@@ -11,11 +11,12 @@
     <header class="topbar">
       <nav class="tabs">
         <button class="tab active" data-tab="quotes">行情</button>
+        <button class="tab" data-tab="sectors">板块</button>
         <button class="tab" data-tab="news">快讯</button>
+        <button class="tab" data-tab="calendar">日历</button>
       </nav>
       <div class="topbar-right">
         <span id="src-dot" class="src-dot" title="数据源状态"></span>
-        <span id="clock" class="clock"></span>
         <select id="refresh-select" class="refresh-select" title="刷新间隔">
           <option value="5000">5s</option>
           <option value="15000" selected>15s</option>
@@ -28,10 +29,11 @@
     <main id="panel-quotes" class="panel active">
       <!-- 指数横滑 -->
       <div id="index-row" class="index-row"></div>
-      <!-- 涨跌家数情绪条 -->
+      <!-- 涨跌家数情绪条 + 盘中资金面 -->
       <div class="breadth">
         <div id="breadth-bar" class="breadth-bar"></div>
         <div id="breadth-labels" class="breadth-labels"></div>
+        <div id="market-flow" class="market-flow"></div>
       </div>
       <!-- 自选股 -->
       <section class="block">
@@ -44,17 +46,6 @@
           <input id="search-input" type="text" placeholder="代码 / 名称 / 拼音" autocomplete="off" />
           <div id="search-result" class="search-result"></div>
         </div>
-      </section>
-      <!-- 板块 -->
-      <section class="block">
-        <div class="block-head">
-          <span class="block-title">板块</span>
-          <div class="seg">
-            <button class="seg-btn active" data-dir="up">涨幅榜</button>
-            <button class="seg-btn" data-dir="down">跌幅榜</button>
-          </div>
-        </div>
-        <div id="sector-list" class="sector-list"></div>
       </section>
       <!-- 分时抽屉 -->
       <div id="trend-drawer" class="trend-drawer hidden">
@@ -74,6 +65,20 @@
       </div>
     </main>
 
+    <!-- 板块 Tab -->
+    <main id="panel-sectors" class="panel hidden">
+      <section class="block">
+        <div class="block-head">
+          <span class="block-title">板块</span>
+          <div class="seg">
+            <button class="seg-btn active" data-dir="up">涨幅榜</button>
+            <button class="seg-btn" data-dir="down">跌幅榜</button>
+          </div>
+        </div>
+        <div id="sector-list" class="sector-list"></div>
+      </section>
+    </main>
+
     <!-- 快讯 Tab -->
     <main id="panel-news" class="panel hidden">
       <div class="news-filter">
@@ -85,6 +90,30 @@
       <div id="new-badge" class="new-badge hidden"></div>
       <div id="news-list" class="news-list"></div>
       <div id="news-end" class="news-end">没有更多了</div>
+    </main>
+
+    <!-- 日历 Tab -->
+    <main id="panel-calendar" class="panel hidden">
+      <div class="cal-toolbar">
+        <div class="seg">
+          <button class="seg-btn" data-caldate="yesterday">昨日</button>
+          <button class="seg-btn active" data-caldate="today">今日</button>
+          <button class="seg-btn" data-caldate="tomorrow">明日</button>
+        </div>
+        <div class="seg">
+          <button class="seg-btn active" data-calfilter="all">全部</button>
+          <button class="seg-btn" data-calfilter="data">数据</button>
+          <button class="seg-btn" data-calfilter="event">事件</button>
+        </div>
+      </div>
+      <div id="ipo-block" class="ipo-block hidden">
+        <div class="block-head">
+          <span class="block-title">打新</span>
+          <span id="ipo-count" class="ipo-count"></span>
+        </div>
+        <div id="ipo-list"></div>
+      </div>
+      <div id="calendar-list" class="cal-list"></div>
     </main>
 
     <div id="error-banner" class="error-banner hidden"></div>

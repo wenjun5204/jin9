@@ -13,13 +13,13 @@
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
-  width: 360px;
+  width: 380px;
   font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
   background: var(--bg);
   color: var(--text);
   font-size: 13px;
 }
-body { max-height: 600px; overflow: hidden; }
+body { max-height: 600px; overflow: hidden; display: flex; flex-direction: column; }
 
 /* ---- 顶栏 ---- */
 .topbar {
@@ -45,14 +45,13 @@ body { max-height: 600px; overflow: hidden; }
 .src-dot.ok { background: var(--down); }
 .src-dot.warn { background: var(--accent); }
 .src-dot.err { background: var(--up); }
-.clock { color: var(--text-dim); font-variant-numeric: tabular-nums; }
 .refresh-select {
   background: var(--bg-hover); color: var(--text); border: 1px solid var(--border);
   border-radius: 4px; padding: 2px 4px; font-size: 11px; outline: none;
 }
 
 /* ---- 面板 ---- */
-.panel { padding: 10px 12px; overflow-y: auto; max-height: calc(600px - 46px); }
+.panel { flex: 1; min-height: 0; padding: 10px 12px; overflow-y: auto; }
 .panel.hidden { display: none; }
 .hidden { display: none !important; }
 
@@ -83,6 +82,16 @@ body { max-height: 600px; overflow: hidden; }
   display: flex; justify-content: space-between; margin-top: 4px;
   color: var(--text-dim); font-size: 11px;
 }
+/* ---- 盘中资金面（情绪条下方一行） ---- */
+.market-flow {
+  display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px;
+  border-top: 1px dashed var(--border);
+  color: var(--text-dim); font-size: 11px;
+}
+.market-flow b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.market-flow i { font-style: normal; font-variant-numeric: tabular-nums; }
+.market-flow i.up { color: var(--up); }
+.market-flow i.down { color: var(--down); }
 
 /* ---- 区块 ---- */
 .block { margin-bottom: 14px; }
@@ -198,6 +207,64 @@ body { max-height: 600px; overflow: hidden; }
   100% { background: transparent; }
 }
 .news-end { text-align: center; color: var(--text-dim); font-size: 12px; padding: 12px; }
+
+/* ---- 财经日历 ---- */
+.cal-toolbar { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.cal-list { display: flex; flex-direction: column; }
+.cal-row {
+  display: flex; align-items: flex-start; gap: 8px; padding: 7px 4px; border-radius: 6px;
+}
+.cal-row:hover { background: var(--bg-hover); }
+.cal-event { cursor: pointer; }
+.cal-time {
+  color: var(--text-dim); font-size: 11px; font-variant-numeric: tabular-nums;
+  min-width: 36px; padding-top: 2px;
+}
+.cal-country {
+  background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px;
+  padding: 1px 6px; font-size: 10px; color: var(--text); white-space: nowrap; margin-top: 1px;
+}
+.cal-main { flex: 1; min-width: 0; }
+.cal-name { font-weight: 600; font-size: 12px; line-height: 1.4; }
+/* 事件行折叠：摘要仅展开时显示（与快讯同范式） */
+.cal-summary { display: none; }
+.cal-event.expanded .cal-summary {
+  display: block; color: var(--text-dim); font-size: 11px; line-height: 1.5;
+  margin-top: 4px; white-space: pre-wrap;
+}
+.cal-values { text-align: right; font-variant-numeric: tabular-nums; }
+.cal-val { font-size: 13px; font-weight: 700; color: var(--text-dim); }
+.cal-val.pub { color: var(--accent); } /* 已公布高亮 */
+.cal-pre { color: var(--text-dim); font-size: 10px; margin-top: 1px; }
+.cal-empty { text-align: center; color: var(--text-dim); padding: 12px; font-size: 12px; }
+.cal-count { color: var(--text-dim); font-size: 11px; padding: 0 4px 6px; }
+.cal-val.tag { font-size: 10px; font-weight: 400; padding-top: 3px; }
+/* 展开指示箭头 */
+.cal-chev { color: var(--text-dim); font-size: 10px; padding-top: 4px; transition: transform 0.15s; }
+.cal-event.expanded .cal-chev { transform: rotate(90deg); }
+/* 展开区：相关快讯与搜索链接 */
+.cal-rel-head { color: var(--text-dim); font-size: 10px; margin-top: 6px; }
+.cal-rel {
+  padding: 4px 0; font-size: 12px; line-height: 1.4; cursor: pointer;
+  color: var(--text);
+}
+.cal-rel:hover { color: var(--accent); }
+.cal-rel-time { color: var(--text-dim); font-size: 10px; margin-right: 6px; }
+.cal-search { display: inline-block; color: var(--accent); font-size: 11px; margin-top: 6px; cursor: pointer; text-decoration: none; }
+.cal-search:hover { text-decoration: underline; }
+
+/* ---- 打新申购名单（日历 Tab 顶部区块） ---- */
+.ipo-block { margin-bottom: 10px; }
+.ipo-count { color: var(--text-dim); font-size: 11px; }
+.ipo-row {
+  display: flex; align-items: center; padding: 7px 4px; border-radius: 6px;
+}
+.ipo-row:hover { background: var(--bg-hover); }
+.ipo-main { flex: 1; min-width: 0; }
+.ipo-name { font-weight: 600; }
+.ipo-sub { color: var(--text-dim); font-size: 11px; margin-top: 1px; }
+.ipo-price { font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ipo-pe { color: var(--text-dim); font-size: 10px; margin-top: 1px; }
 
 /* ---- 错误横幅 ---- */
 .error-banner {

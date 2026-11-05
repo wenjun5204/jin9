@@ -30,6 +30,7 @@
     "https://push2ex.eastmoney.com/*",
     "https://searchapi.eastmoney.com/*",
     "https://np-listapi.eastmoney.com/*",
-    "https://qt.gtimg.cn/*"
+    "https://qt.gtimg.cn/*",
+    "https://datacenter-web.eastmoney.com/*"
   ]
 }
