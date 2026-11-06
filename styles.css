@@ -65,6 +65,10 @@ body { max-height: 600px; overflow: hidden; display: flex; flex-direction: colum
   background: var(--bg-panel); border: 1px solid var(--border); cursor: pointer;
 }
 .index-card:hover { background: var(--bg-hover); }
+/* 拖拽排序：被拖卡片半透明 + 高亮描边 */
+.index-card.dragging {
+  opacity: .45; border-color: var(--accent); background: var(--bg-hover);
+}
 .index-name { color: var(--text-dim); font-size: 12px; }
 .index-price { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .index-pct { font-size: 12px; }

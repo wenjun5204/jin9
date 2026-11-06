@@ -16,6 +16,9 @@ let trendRange = "1d"; // 1d 当日分时 | 7d 近7日 | 1m 近一月 | 6m 近�
 let sectorDir = "up"; // 板块榜方向：up 涨幅榜 | down 跌幅榜
 let calDate = "today"; // 日历日期：yesterday | today | tomorrow
 let calFilter = "all"; // 日历过滤：all | data | event
+let indexOrder = []; // 指数卡片自定义排序（secid 优先级），空 = 默认顺序
+let dragSecid = null; // 正在拖拽的指数卡片（拖拽中暂停指数重渲染）
+let dragStartOrder = []; // 拖起时的卡片顺序（dragend 对比是否真的换了位）
 const calCache = new Map(); // 日期字符串 -> { econ, events, failed, ts }（10 分钟内复用）
 
 const $ = (sel) => document.querySelector(sel);
@@ -38,6 +41,7 @@ async function refreshNow() {
   const res = await chrome.runtime.sendMessage({ type: "REFRESH_NOW" });
   if (res?.ok) {
     snapshot = res.snapshot;
+    if (res.settings?.indexOrder) indexOrder = res.settings.indexOrder;
     render();
   }
 }
@@ -150,6 +154,8 @@ function bindUI() {
     const card = e.target.closest(".index-card");
     if (card) openTrend(card.dataset.secid, card.dataset.name);
   });
+  // 指数卡片拖拽排序
+  bindIndexDrag();
   // 点击自选行 -> 分时
   $("#watch-list").addEventListener("click", (e) => {
     const del = e.target.closest(".q-del");
@@ -342,6 +348,79 @@ function drawLine(data, label) {
   ctx.fillText(`▍${label} ${pts[0].date} ~ ${pts[pts.length - 1].date}`, padL, H - 3);
 }
 
+// ---------- 指数卡片拖拽排序 ----------
+function bindIndexDrag() {
+  const row = $("#index-row");
+
+  row.addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".index-card");
+    if (!card) return;
+    dragSecid = card.dataset.secid;
+    dragStartOrder = [...row.querySelectorAll(".index-card")].map((c) => c.dataset.secid);
+    card.classList.add("dragging");
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", dragSecid); // Firefox 需要
+  });
+
+  row.addEventListener("dragover", (e) => {
+    if (!dragSecid) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const dragging = row.querySelector(".index-card.dragging");
+    if (!dragging) return;
+    // 拖到容器边缘时自动横滚，方便拖到首/尾
+    const rect = row.getBoundingClientRect();
+    if (e.clientX < rect.left + 30) row.scrollLeft -= 10;
+    else if (e.clientX > rect.right - 30) row.scrollLeft += 10;
+    // 实时换位：插入到光标最近且在其右侧的卡片之前
+    const after = getDragAfterElement(row, e.clientX);
+    if (!after) row.appendChild(dragging);
+    else if (after !== dragging) row.insertBefore(dragging, after);
+  });
+
+  row.addEventListener("dragend", () => {
+    const card = row.querySelector(".index-card.dragging");
+    card?.classList.remove("dragging");
+    if (dragSecid) {
+      const newOrder = [...row.querySelectorAll(".index-card")].map((c) => c.dataset.secid);
+      if (newOrder.join() !== dragStartOrder.join()) {
+        indexOrder = newOrder;
+        saveIndexOrder();
+      }
+    }
+    dragSecid = null;
+    renderIndexes(); // 按（新）顺序统一重渲染，去掉拖拽残留状态
+  });
+}
+
+/** 光标左侧最近的非拖拽卡片（作为插入锚点） */
+function getDragAfterElement(container, x) {
+  const cards = [...container.querySelectorAll(".index-card:not(.dragging)")];
+  let closest = null;
+  let closestOffset = -Infinity;
+  for (const child of cards) {
+    const box = child.getBoundingClientRect();
+    const offset = x - box.left - box.width / 2;
+    if (offset < 0 && offset > closestOffset) {
+      closestOffset = offset;
+      closest = child;
+    }
+  }
+  return closest;
+}
+
+async function saveIndexOrder() {
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "SET_SETTINGS",
+      settings: { indexOrder },
+    });
+    if (res?.ok && res.settings?.indexOrder) indexOrder = res.settings.indexOrder;
+  } catch (e) {
+    /* 保存失败仅本次会话生效，不打断 UI */
+  }
+}
+
 // ---------- 渲染 ----------
 function render() {
   renderQuotes();
@@ -370,19 +449,31 @@ function renderQuotes() {
 }
 
 function renderIndexes() {
-  const rows = snapshot?.indexes || [];
+  if (dragSecid) return; // 拖拽中不重渲染，避免轮询广播冲掉正在拖的 DOM
+  const rows = orderedIndexes();
   $("#index-row").innerHTML = rows
     .map((i) => {
       const cls = i.pct > 0 ? "up" : i.pct < 0 ? "down" : "flat";
       // 外汇（离岸人民币）保留 4 位小数，其余 2 位
       const dec = i.price > 0 && i.price < 10 ? 4 : 2;
-      return `<div class="index-card" data-secid="${i.secid}" data-name="${i.name}">
+      return `<div class="index-card" draggable="true" data-secid="${i.secid}" data-name="${i.name}" title="点击看分时 · 可拖拽排序">
         <div class="index-name">${i.name}</div>
         <div class="index-price ${cls}">${fmtPrice(i.price, dec)}</div>
         <div class="index-pct ${cls}">${fmtPct(i.pct)}</div>
       </div>`;
     })
     .join("");
+}
+
+/** 按用户自定义顺序排指数卡片；未记录的（新增指数）追加在尾部 */
+function orderedIndexes() {
+  const rows = [...(snapshot?.indexes || [])];
+  if (!indexOrder.length) return rows;
+  const rank = new Map(indexOrder.map((s, i) => [s, i]));
+  const tail = indexOrder.length;
+  return rows.sort(
+    (a, b) => (rank.get(a.secid) ?? tail) - (rank.get(b.secid) ?? tail)
+  );
 }
 
 function renderBreadth() {
